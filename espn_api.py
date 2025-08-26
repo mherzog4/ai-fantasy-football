@@ -2,6 +2,8 @@ import os
 import json
 import requests
 from urllib.parse import unquote
+import dotenv
+dotenv.load_dotenv()
 
 # --- CONFIG ---
 LEAGUE_ID = 1866946053
@@ -11,10 +13,10 @@ WEEK = 1              # change to desired week; omit to use current week
 
 # Prefer env vars for cookies (safer). Fallback to literals if needed.
 # Use the URL-encoded values from the browser and decode them
-_ESPN_S2_ENCODED = "AEA%2F1l1nOxcw2G%2BAFY%2FPQW35gBxjiCemfHjo3oE7yccHUobHWV%2BJi5zCLfX4ArOBa49hslhbBupC3O%2B6EPWAdLQC9kUSA2oOccGrDUs2OskTlo6BnzdzkBTGYYn8UqOnukhk23gkNJlLcJEXestGFCF%2BdmzlPWi8QWIt5am7C2vMX6re8EjPhhtUPgA4sDwEZVyhrwzifVdKuF55Oggsw0tJGYfJjm2WF8tQeOob74QApFopqrWSmGnsaE2nfhNFaMw1Fg03Nfa8UB4tswyl0R6nb7%2FYA2D%2F0g5Zg04E%2BWCNLA%3D%3D"
-
-ESPN_S2 = os.getenv("ESPN_S2") or unquote(_ESPN_S2_ENCODED)
-SWID = os.getenv("SWID") or "{279F73E6-179A-40C3-80F2-889F8B9E968A}"
+ESPN_S2_ENCODED = os.getenv("ESPN_S2_ENCODED")
+ESPN_AUTH = os.getenv("ESPN_AUTH")
+ESPN_S2 = os.getenv("ESPN_S2") or unquote(ESPN_S2_ENCODED)
+SWID = os.getenv("SWID")
 
 BASE = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{SEASON}/segments/0/leagues/{LEAGUE_ID}"
 
@@ -36,9 +38,9 @@ def espn_get(views, extra_params=None):
         auth_cookies = {
             "ESPN_S2": ESPN_S2, 
             "SWID": SWID,
-            "espn_s2": unquote("AEA%2F1l1nOxcw2G%2BAFY%2FPQW35gBxjiCemfHjo3oE7yccHUobHWV%2BJi5zCLfX4ArOBa49hslhbBupC3O%2B6EPWAdLQC9kUSA2oOccGrDUs2OskTlo6BnzdzkBTGYYn8UqOnukhk23gkNJlLcJEXestGFCF%2BdmzlPWi8QWIt5am7C2vMX6re8EjPhhtUPgA4sDwEZVyhrwzifVdKuF55Oggsw0tJGYfJjm2WF8tQeOob74QApFopqrWSmGnsaE2nfhNFaMw1Fg03Nfa8UB4tswyl0R6nb7%2FYA2D%2F0g5Zg04E%2BWCNLA%3D%3D"),
-            "espnAuth": '{"swid":"{279F73E6-179A-40C3-80F2-889F8B9E968A}"}',
-            "ESPN-ONESITE.WEB-PROD.api": "3eRWcGGEEQuUs6fkP4ojUKC2ZiTtCJMwaC1YQSB0IguvDUP6LgcIaGJTcBj+A2MoJsR6VBiSRqrbdUQRE2rrquVVTXSB"
+            "espn_s2": ESPN_S2_ENCODED,
+            "espnAuth": ESPN_AUTH,
+            # "ESPN-ONESITE.WEB-PROD.api": "3eRWcGGEEQuUs6fkP4ojUKC2ZiTtCJMwaC1YQSB0IguvDUP6LgcIaGJTcBj+A2MoJsR6VBiSRqrbdUQRE2rrquVVTXSB"
         }
         s.cookies.update(auth_cookies)
         
