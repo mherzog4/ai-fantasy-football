@@ -6,10 +6,10 @@ import dotenv
 dotenv.load_dotenv()
 
 # --- CONFIG ---
-LEAGUE_ID = 1866946053
-TEAM_ID = 8           # <-- your team
+LEAGUE_ID = os.getenv("LEAGUE_ID")  
+TEAM_ID = os.getenv("TEAM_ID")
 SEASON = 2025
-WEEK = 1              # change to desired week; omit to use current week
+WEEK = 1           # change to desired week; omit to use current week
 
 # Prefer env vars for cookies (safer). Fallback to literals if needed.
 # Use the URL-encoded values from the browser and decode them
