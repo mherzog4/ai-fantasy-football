@@ -9,16 +9,46 @@ dotenv.load_dotenv()
 LEAGUE_ID = os.getenv("LEAGUE_ID")  
 TEAM_ID = os.getenv("TEAM_ID")
 SEASON = 2025
-WEEK = 1           # change to desired week; omit to use current week
+WEEK = None        # Set to None to auto-detect current week, or specify a week number
 
 # Prefer env vars for cookies (safer). Fallback to literals if needed.
 # Use the URL-encoded values from the browser and decode them
 ESPN_S2_ENCODED = os.getenv("ESPN_S2_ENCODED")
 ESPN_AUTH = os.getenv("ESPN_AUTH")
-ESPN_S2 = os.getenv("ESPN_S2") or unquote(ESPN_S2_ENCODED)
+ESPN_S2 = os.getenv("ESPN_S2") or (unquote(ESPN_S2_ENCODED) if ESPN_S2_ENCODED else None)
 SWID = os.getenv("SWID")
 
 BASE = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{SEASON}/segments/0/leagues/{LEAGUE_ID}"
+
+def get_current_week():
+    """
+    Get the current week from ESPN's league settings.
+    Returns the current scoring period ID.
+    """
+    try:
+        # Get basic league info to find current week
+        data = espn_get(["mSettings"])
+        settings = data.get("settings", {})
+        
+        # ESPN provides the current scoring period in settings
+        current_week = settings.get("scoringPeriodId")
+        if current_week:
+            return current_week
+            
+        # Fallback: try to get from season info
+        season_info = settings.get("seasonId")
+        if season_info:
+            # This is a rough calculation - you might need to adjust based on when season starts
+            from datetime import datetime
+            season_start = datetime(2025, 9, 4)  # Approximate NFL season start
+            current_date = datetime.now()
+            weeks_elapsed = (current_date - season_start).days // 7
+            return max(1, min(18, weeks_elapsed + 1))  # NFL season is typically 18 weeks
+        
+        return 1  # Default fallback
+    except Exception as e:
+        print(f"Warning: Could not auto-detect current week: {e}")
+        return 1
 
 def espn_get(views, extra_params=None):
     """
@@ -100,6 +130,11 @@ def get_team_roster(league_id, team_id, week=None):
     """
     Fetch roster + settings, return a list of rows with resolved names.
     """
+    # Auto-detect current week if not specified
+    if week is None:
+        week = get_current_week()
+        print(f"Auto-detected current week: {week}")
+    
     # Pull roster + settings together so we can resolve IDs to names
     # Use the exact parameter format from the working browser request
     params = {"rosterForTeamId": team_id}
@@ -227,6 +262,9 @@ if __name__ == "__main__":
     if not SWID or "PUT-YOUR-SWID-HERE" in SWID:
         print("⚠️  SWID not set. Set SWID env var or update the literal.")
 
+    # Use WEEK if specified, otherwise auto-detect
+    current_week = WEEK if WEEK is not None else get_current_week()
+    print(f"Using week: {current_week}")
 
-    team_name, roster_rows = get_team_roster(LEAGUE_ID, TEAM_ID, week=WEEK)
-    print_roster_table(team_name, roster_rows, week=WEEK)
+    team_name, roster_rows = get_team_roster(LEAGUE_ID, TEAM_ID, week=current_week)
+    print_roster_table(team_name, roster_rows, week=current_week)

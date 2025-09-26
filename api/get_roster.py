@@ -5,6 +5,7 @@ import json
 import requests
 from urllib.parse import unquote
 import dotenv
+from datetime import datetime
 dotenv.load_dotenv()
 
 app = FastAPI()
@@ -13,15 +14,66 @@ app = FastAPI()
 LEAGUE_ID = os.getenv("LEAGUE_ID")  
 TEAM_ID = os.getenv("TEAM_ID")
 SEASON = 2025
-WEEK = 1           # change to desired week; omit to use current week
+WEEK = None        # Set to None to auto-detect current week, or specify a week number
 
 # Get cookies from environment variables
 ESPN_S2_ENCODED = os.getenv("ESPN_S2_ENCODED")
 ESPN_AUTH = os.getenv("ESPN_AUTH")
-ESPN_S2 = os.getenv("ESPN_S2") or unquote(ESPN_S2_ENCODED)
+ESPN_S2 = os.getenv("ESPN_S2") or (unquote(ESPN_S2_ENCODED) if ESPN_S2_ENCODED else None)
 SWID = os.getenv("SWID")
 
 BASE = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{SEASON}/segments/0/leagues/{LEAGUE_ID}"
+
+def get_current_week():
+    """
+    Get the current week from ESPN's league settings.
+    Returns the current scoring period ID.
+    """
+    try:
+        # Get basic league info to find current week
+        data = espn_get(["mSettings"])
+        settings = data.get("settings", {})
+        
+        print(f"Settings data: {settings}")
+        
+        # ESPN provides the current scoring period in settings
+        current_week = settings.get("scoringPeriodId")
+        if current_week:
+            print(f"Found current week from ESPN: {current_week}")
+            return current_week
+            
+        # Try to get from schedule data
+        schedule_data = espn_get(["mSchedule"])
+        schedule = schedule_data.get("schedule", [])
+        print(f"Schedule data: {len(schedule)} matchups found")
+        
+        if schedule:
+            # Find the highest week number in the schedule
+            max_week = 0
+            for matchup in schedule:
+                week = matchup.get("matchupPeriodId", 0)
+                if week > max_week:
+                    max_week = week
+            if max_week > 0:
+                print(f"Found max week from schedule: {max_week}")
+                return max_week
+        
+        # Fallback: try to get from season info
+        season_info = settings.get("seasonId")
+        if season_info:
+            # This is a rough calculation - you might need to adjust based on when season starts
+            season_start = datetime(2025, 9, 4)  # Approximate NFL season start
+            current_date = datetime.now()
+            weeks_elapsed = (current_date - season_start).days // 7
+            calculated_week = max(1, min(18, weeks_elapsed + 1))  # NFL season is typically 18 weeks
+            print(f"Calculated week from date: {calculated_week}")
+            return calculated_week
+        
+        print("Using default week 1")
+        return 1  # Default fallback
+    except Exception as e:
+        print(f"Warning: Could not auto-detect current week: {e}")
+        return 1
 
 def espn_get(views, extra_params=None):
     """
@@ -125,6 +177,10 @@ def get_roster():
         league_id = int(LEAGUE_ID) if LEAGUE_ID else 1866946053
         team_id = int(TEAM_ID) if TEAM_ID else 8
         
+        # Auto-detect current week if not specified
+        current_week = WEEK if WEEK is not None else get_current_week()
+        print(f"Using week: {current_week}")
+        
         # Use expanded views to get projections, opponents, and more detailed data
         views = ["mTeam", "mSettings", "mRoster", "mPlayer", "mMatchupScore", "mSchedule"]
         
@@ -157,7 +213,6 @@ def get_roster():
             raise HTTPException(status_code=404, detail=f"Team {team_id} not found. Available teams: {[t.get('id') for t in teams]}")
         
         # Get current week matchup
-        current_week = WEEK
         current_matchup = None
         for matchup in schedule:
             if matchup.get("matchupPeriodId") == current_week:
@@ -338,14 +393,14 @@ def get_roster():
         
         return {
             "team_name": team_name,
-            "week": WEEK,
+            "week": current_week,
             "roster": roster_rows,
             "current_matchup": current_matchup,
             "debug_info": {
                 "league_id": str(league_id),
                 "team_id": str(team_id),
                 "season": SEASON,
-                "week": WEEK,
+                "week": current_week,
                 "roster_count": len(roster_rows),
                 "api_endpoint": BASE,
                 "views_used": views,
@@ -363,6 +418,254 @@ def get_roster():
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error fetching roster: {str(e)}")
+
+@app.get("/debug_week")
+def debug_week():
+    """Debug endpoint to see what week data we're getting"""
+    try:
+        # Get settings data
+        settings_data = espn_get(["mSettings"])
+        settings = settings_data.get("settings", {})
+        
+        # Get schedule data
+        schedule_data = espn_get(["mSchedule"])
+        schedule = schedule_data.get("schedule", [])
+        
+        # Get current week
+        current_week = get_current_week()
+        
+        # Find matchups for different weeks
+        week_matchups = {}
+        for matchup in schedule:
+            week = matchup.get("matchupPeriodId", 0)
+            if week not in week_matchups:
+                week_matchups[week] = []
+            week_matchups[week].append({
+                "id": matchup.get("id"),
+                "teams": [{"id": t.get("id"), "name": f"{t.get('location', '')} {t.get('nickname', '')}".strip()} for t in matchup.get("teams", [])]
+            })
+        
+        return {
+            "current_week": current_week,
+            "settings": {
+                "scoringPeriodId": settings.get("scoringPeriodId"),
+                "seasonId": settings.get("seasonId"),
+                "keys": list(settings.keys())
+            },
+            "schedule_info": {
+                "total_matchups": len(schedule),
+                "weeks_available": list(week_matchups.keys()),
+                "week_matchups": week_matchups
+            },
+            "league_id": LEAGUE_ID,
+            "team_id": TEAM_ID
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "current_week": 1
+        }
+
+@app.get("/get_matchup")
+def get_matchup():
+    """Get current week matchup data for both teams"""
+    try:
+        # Convert string IDs to integers for comparison
+        league_id = int(LEAGUE_ID) if LEAGUE_ID else 1866946053
+        team_id = int(TEAM_ID) if TEAM_ID else 8
+        
+        # Auto-detect current week if not specified
+        current_week = WEEK if WEEK is not None else get_current_week()
+        print(f"Matchup API - Using week: {current_week}")
+        
+        # Use expanded views to get matchup data
+        views = ["mTeam", "mSettings", "mRoster", "mMatchupScore", "mSchedule", "mPlayer"]
+        
+        data = espn_get(views)
+        
+        if not data:
+            raise HTTPException(status_code=500, detail="No data returned from ESPN API")
+        
+        teams = data.get("teams", [])
+        schedule = data.get("schedule", [])
+        
+        print(f"Matchup API - Teams found: {len(teams)}")
+        print(f"Matchup API - Schedule found: {len(schedule)}")
+        
+        if not teams:
+            raise HTTPException(status_code=404, detail="No teams returned from ESPN API")
+        
+        # Find current week matchup
+        current_matchup = None
+        for matchup in schedule:
+            if matchup.get("matchupPeriodId") == current_week:
+                # Check if our team is in this matchup
+                for team in matchup.get("teams", []):
+                    if team.get("id") == team_id:
+                        current_matchup = matchup
+                        break
+                if current_matchup:
+                    break
+        
+        # If no matchup found for current week, try to find any matchup with our team
+        if not current_matchup:
+            print(f"No matchup found for week {current_week}, searching for any matchup with team {team_id}")
+            for matchup in schedule:
+                for team in matchup.get("teams", []):
+                    if team.get("id") == team_id:
+                        current_matchup = matchup
+                        current_week = matchup.get("matchupPeriodId", current_week)
+                        print(f"Found matchup in week {current_week}")
+                        break
+                if current_matchup:
+                    break
+        
+        if not current_matchup:
+            # Return a mock matchup for testing
+            print("No matchup found, returning mock data")
+            return {
+                "week": current_week,
+                "my_team": {
+                    "team_id": team_id,
+                    "team_name": f"Team {team_id}",
+                    "manager": "Unknown",
+                    "record": "(0-0-0)",
+                    "current_score": 0,
+                    "projected_total": 0,
+                    "roster": []
+                },
+                "opponent_team": {
+                    "team_id": 999,
+                    "team_name": "Mock Opponent",
+                    "manager": "Unknown",
+                    "record": "(0-0-0)",
+                    "current_score": 0,
+                    "projected_total": 0,
+                    "roster": []
+                },
+                "my_win_probability": 50,
+                "opponent_win_probability": 50,
+                "matchup_id": None,
+                "debug_info": {
+                    "league_id": str(league_id),
+                    "team_id": str(team_id),
+                    "current_week": current_week,
+                    "my_roster_count": 0,
+                    "opponent_roster_count": 0,
+                    "note": "Mock data - no real matchup found"
+                }
+            }
+        
+        # Get both teams from the matchup
+        matchup_teams = current_matchup.get("teams", [])
+        my_team = None
+        opponent_team = None
+        
+        for team in matchup_teams:
+            if team.get("id") == team_id:
+                my_team = team
+            else:
+                opponent_team = team
+        
+        if not my_team or not opponent_team:
+            raise HTTPException(status_code=404, detail="Could not find both teams in matchup")
+        
+        # Get rosters for both teams
+        my_roster = my_team.get("roster", {}).get("entries", [])
+        opponent_roster = opponent_team.get("roster", {}).get("entries", [])
+        
+        # Process my team roster
+        my_team_data = {
+            "team_id": my_team.get("id"),
+            "team_name": f"{my_team.get('location','').strip()} {my_team.get('nickname','').strip()}".strip(),
+            "manager": my_team.get("owners", [{}])[0].get("displayName", "Unknown"),
+            "record": f"({my_team.get('record', {}).get('overall', {}).get('wins', 0)}-{my_team.get('record', {}).get('overall', {}).get('losses', 0)}-{my_team.get('record', {}).get('overall', {}).get('ties', 0)})",
+            "current_score": my_team.get("roster", {}).get("appliedStatTotal", 0),
+            "projected_total": my_team.get("roster", {}).get("appliedStatTotal", 0),
+            "roster": []
+        }
+        
+        # Process opponent team roster
+        opponent_team_data = {
+            "team_id": opponent_team.get("id"),
+            "team_name": f"{opponent_team.get('location','').strip()} {opponent_team.get('nickname','').strip()}".strip(),
+            "manager": opponent_team.get("owners", [{}])[0].get("displayName", "Unknown"),
+            "record": f"({opponent_team.get('record', {}).get('overall', {}).get('wins', 0)}-{opponent_team.get('record', {}).get('overall', {}).get('losses', 0)}-{opponent_team.get('record', {}).get('overall', {}).get('ties', 0)})",
+            "current_score": opponent_team.get("roster", {}).get("appliedStatTotal", 0),
+            "projected_total": opponent_team.get("roster", {}).get("appliedStatTotal", 0),
+            "roster": []
+        }
+        
+        # Process rosters with lineup positions
+        def process_roster(roster_entries, team_name):
+            processed_roster = []
+            for entry in roster_entries:
+                player_pool_entry = entry.get("playerPoolEntry", {})
+                player = player_pool_entry.get("player", {})
+                lineup_slot = entry.get("lineupSlotId", 20)
+                
+                # Get current week stats
+                current_score = 0
+                stats = player.get("stats", [])
+                for stat in stats:
+                    if stat.get("seasonId") == 2025 and stat.get("scoringPeriodId") == current_week:
+                        current_score = stat.get("appliedTotal", 0)
+                        break
+                
+                # Get weekly projection
+                weekly_proj = 0
+                for stat in stats:
+                    if stat.get("statSourceId") == 1 and stat.get("scoringPeriodId") == current_week:
+                        weekly_proj = stat.get("appliedTotal", 0)
+                        break
+                
+                processed_roster.append({
+                    "lineup_slot": lineup_slot,
+                    "position": get_position_name(lineup_slot),
+                    "player_name": player.get("fullName", "Unknown"),
+                    "nfl_team": get_nfl_team_name(player.get("proTeamId", 0)),
+                    "injury_status": player.get("injuryStatus", "ACTIVE"),
+                    "current_score": current_score,
+                    "projection": weekly_proj,
+                    "opponent": "TBD"
+                })
+            
+            # Sort by lineup slot (starters first)
+            processed_roster.sort(key=lambda x: x["lineup_slot"])
+            return processed_roster
+        
+        my_team_data["roster"] = process_roster(my_roster, my_team_data["team_name"])
+        opponent_team_data["roster"] = process_roster(opponent_roster, opponent_team_data["team_name"])
+        
+        # Calculate win probability (simplified)
+        my_total_proj = sum(player["projection"] for player in my_team_data["roster"] if player["lineup_slot"] < 20)
+        opponent_total_proj = sum(player["projection"] for player in opponent_team_data["roster"] if player["lineup_slot"] < 20)
+        
+        total_proj = my_total_proj + opponent_total_proj
+        my_win_prob = int((my_total_proj / total_proj * 100)) if total_proj > 0 else 50
+        opponent_win_prob = 100 - my_win_prob
+        
+        return {
+            "week": current_week,
+            "my_team": my_team_data,
+            "opponent_team": opponent_team_data,
+            "my_win_probability": my_win_prob,
+            "opponent_win_probability": opponent_win_prob,
+            "matchup_id": current_matchup.get("id"),
+            "debug_info": {
+                "league_id": str(league_id),
+                "team_id": str(team_id),
+                "current_week": current_week,
+                "my_roster_count": len(my_roster),
+                "opponent_roster_count": len(opponent_roster)
+            }
+        }
+        
+    except Exception as e:
+        print(f"Error in get_matchup: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error fetching matchup: {str(e)}")
 
 @app.get("/view_roster", response_class=HTMLResponse)
 def view_roster():
@@ -429,7 +732,7 @@ def view_roster():
             <div class="container">
                 <h1>🏈 {team_name}</h1>
                 <div class="roster-info">
-                    <strong>Season {SEASON} • Week {WEEK} • League ID: {league_id} • Team ID: {team_id}</strong>
+                    <strong>Season {SEASON} • Week {get_current_week()} • League ID: {league_id} • Team ID: {team_id}</strong>
                 </div>
                 
                 <table>
@@ -513,3 +816,23 @@ def view_roster():
         </html>
         """
         return HTMLResponse(content=error_html, status_code=500)
+
+@app.get("/get_current_week")
+def get_current_week_endpoint():
+    """Get the current week from ESPN"""
+    try:
+        current_week = get_current_week()
+        return {
+            "current_week": current_week,
+            "season": SEASON,
+            "league_id": LEAGUE_ID,
+            "team_id": TEAM_ID
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "current_week": 1,
+            "season": SEASON,
+            "league_id": LEAGUE_ID,
+            "team_id": TEAM_ID
+        }
