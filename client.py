@@ -52,7 +52,7 @@ except Exception as e:
     print(f"Error initializing OpenAI client: {e}")
 
 # API Configuration
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = "https://ai-fantasy-football.onrender.com"
 
 @st.cache_data(ttl=30)  # Cache for 30 seconds only
 def get_roster():
