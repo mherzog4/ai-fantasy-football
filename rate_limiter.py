@@ -38,19 +38,38 @@ class RateLimiter:
     
     def _initialize_session_state(self):
         """Initialize session state for rate limiting data"""
-        if self.session_key not in st.session_state:
-            st.session_state[self.session_key] = {
-                "hourly_usage": [],  # List of (timestamp, cost) tuples
+        try:
+            if self.session_key not in st.session_state:
+                st.session_state[self.session_key] = {
+                    "hourly_usage": [],  # List of (timestamp, cost) tuples
+                    "total_spent_today": 0.0,
+                    "last_reset": datetime.now().isoformat()
+                }
+        except Exception:
+            # If session state is not available, create a fallback
+            self._fallback_data = {
+                "hourly_usage": [],
                 "total_spent_today": 0.0,
                 "last_reset": datetime.now().isoformat()
             }
+    
+    def _get_data(self):
+        """Get data from session state or fallback"""
+        try:
+            return st.session_state[self.session_key]
+        except:
+            return getattr(self, '_fallback_data', {
+                "hourly_usage": [],
+                "total_spent_today": 0.0,
+                "last_reset": datetime.now().isoformat()
+            })
     
     def _clean_old_usage(self):
         """Remove usage data older than 1 hour"""
         current_time = datetime.now()
         cutoff_time = current_time - timedelta(hours=1)
         
-        data = st.session_state[self.session_key]
+        data = self._get_data()
         
         # Filter out old entries
         data["hourly_usage"] = [
@@ -61,7 +80,7 @@ class RateLimiter:
     def get_current_hourly_usage(self) -> float:
         """Get current spending in the last hour"""
         self._clean_old_usage()
-        data = st.session_state[self.session_key]
+        data = self._get_data()
         return sum(cost for _, cost in data["hourly_usage"])
     
     def estimate_request_cost(self, 
@@ -99,7 +118,7 @@ class RateLimiter:
     def record_usage(self, actual_cost: float):
         """Record actual API usage cost"""
         current_time = datetime.now().isoformat()
-        data = st.session_state[self.session_key]
+        data = self._get_data()
         
         # Add to hourly usage
         data["hourly_usage"].append((current_time, actual_cost))
@@ -133,7 +152,7 @@ class RateLimiter:
     def get_usage_stats(self) -> Dict:
         """Get current usage statistics"""
         current_usage = self.get_current_hourly_usage()
-        data = st.session_state[self.session_key]
+        data = self._get_data()
         
         return {
             "hourly_usage": current_usage,
@@ -146,7 +165,7 @@ class RateLimiter:
     
     def reset_daily_usage(self):
         """Reset daily usage counter (called at midnight)"""
-        data = st.session_state[self.session_key]
+        data = self._get_data()
         data["total_spent_today"] = 0.0
         data["last_reset"] = datetime.now().isoformat()
 

@@ -45,10 +45,11 @@ try:
         client = OpenAI(api_key=api_key)
     else:
         client = None
-        st.error("OpenAI API key not found. Please set OPENAI_API_KEY environment variable.")
+        # Will show error later in the UI
+        print("OpenAI API key not found. Please set OPENAI_API_KEY environment variable.")
 except Exception as e:
     client = None
-    st.error(f"Error initializing OpenAI client: {e}")
+    print(f"Error initializing OpenAI client: {e}")
 
 # API Configuration
 API_BASE_URL = "http://localhost:8000"
@@ -528,10 +529,19 @@ st.markdown("""
 # Title
 st.title("🏈 Fantasy Football Dashboard")
 
+# Check for OpenAI API key
+if not client:
+    st.error("⚠️ **OpenAI API key not configured**")
+    st.info("Please set the OPENAI_API_KEY environment variable or in Streamlit secrets to use AI features.")
+    st.stop()
+
 # Display rate limiting dashboard in sidebar
 if RATE_LIMITING_ENABLED:
-    display_usage_dashboard()
-    show_feature_costs()
+    try:
+        display_usage_dashboard()
+        show_feature_costs()
+    except Exception as e:
+        st.sidebar.error(f"Rate limiting dashboard error: {str(e)}")
 
 # Add cache clearing button
 if st.button("🔄 Refresh Data", help="Clear cache and fetch fresh data"):
