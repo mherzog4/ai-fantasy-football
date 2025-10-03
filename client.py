@@ -5,6 +5,10 @@ from datetime import datetime
 from openai import OpenAI
 import os
 from dotenv import load_dotenv
+import logging
+
+# Suppress verbose logging that might show HTML content
+logging.getLogger().setLevel(logging.ERROR)
 
 # Load environment variables
 load_dotenv()
@@ -469,7 +473,7 @@ try:
         opponent_projected_total = sum(player["projection"] for player in opponent_team["roster"] if player["lineup_slot"] < 20 or player["lineup_slot"] in [22, 23])
         
         # Enhanced ESPN-style header with dynamic data
-        st.markdown(f"""
+        matchup_html = f"""
         <div class="matchup-container">
             <div class="espn-matchup-header">
                 <div class="espn-team-left">
@@ -498,7 +502,10 @@ try:
                 </div>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """
+        
+        # Render the HTML safely
+        st.markdown(matchup_html, unsafe_allow_html=True)
         
         # Display roster tables side by side
         left_col, right_col = st.columns(2)
