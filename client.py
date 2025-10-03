@@ -504,8 +504,12 @@ try:
         </div>
         """
         
-        # Render the HTML safely
-        st.markdown(matchup_html, unsafe_allow_html=True)
+        # Use st.html() for better HTML rendering
+        try:
+            st.html(matchup_html)
+        except AttributeError:
+            # Fallback for older Streamlit versions
+            st.markdown(matchup_html, unsafe_allow_html=True)
         
         # Display roster tables side by side
         left_col, right_col = st.columns(2)
