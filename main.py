@@ -30,26 +30,26 @@ def start_fastapi():
         ])
 
 def start_streamlit():
-    """Start the Streamlit app"""
-    print("📊 Starting Streamlit app...")
+    """Start the AI Chat Interface"""
+    print("🤖 Starting AI Chat Interface...")
     time.sleep(5)  # Give FastAPI more time to start properly
     
     try:
         subprocess.run([
-            "uv", "run", "streamlit", "run", "client.py",
+            "uv", "run", "streamlit", "run", "main_client.py",
             "--server.port", "8501",
             "--server.address", "0.0.0.0"
         ], check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
         print("uv not found, falling back to direct python...")
         subprocess.run([
-            sys.executable, "-m", "streamlit", "run", "client.py",
+            sys.executable, "-m", "streamlit", "run", "main_client.py",
             "--server.port", "8501",
             "--server.address", "0.0.0.0"
         ])
 
 def main():
-    print("🏈 Fantasy Football Dashboard Starting...")
+    print("🤖 Fantasy Football AI Chat Starting...")
     print("=" * 50)
     
     # Start FastAPI in a separate thread

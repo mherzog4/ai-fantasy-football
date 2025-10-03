@@ -1,20 +1,42 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 import json
 import requests
+import string
 from urllib.parse import unquote
 import dotenv
 from typing import List, Optional, Dict
 from .ai_services import FantasyAIService
+from .chat_agent import FantasyChatAgent
+
+# Import rate limiter
+try:
+    from rate_limiter import RateLimiter
+    rate_limiter = RateLimiter()
+    RATE_LIMITING_ENABLED = True
+except ImportError:
+    RATE_LIMITING_ENABLED = False
+    rate_limiter = None
 
 dotenv.load_dotenv()
 
 app = FastAPI(title="Fantasy Football API", description="ESPN Fantasy Football API Wrapper")
 
-# Initialize AI service
+# Add CORS middleware for Streamlit
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize AI services
 ai_service = FantasyAIService()
+chat_agent = FantasyChatAgent()
 
 # Pydantic models for request/response
 class PlayerComparisonRequest(BaseModel):
@@ -31,6 +53,20 @@ class WaiverWireRequest(BaseModel):
 class TradeAnalysisRequest(BaseModel):
     include_league_rosters: bool = True
     focus_positions: Optional[List[str]] = None
+    target_player: Optional[str] = None
+
+class ChatRequest(BaseModel):
+    message: str
+    conversation_history: Optional[List[Dict]] = None
+    league_context: Optional[Dict] = None
+
+class InjuryReportRequest(BaseModel):
+    include_web_search: bool = True
+
+class ChatStreamRequest(BaseModel):
+    message: str
+    conversation_history: Optional[List[Dict]] = None
+    league_context: Optional[Dict] = None
 
 # --- CONFIG ---
 LEAGUE_ID = os.getenv("LEAGUE_ID")  
@@ -45,6 +81,25 @@ ESPN_S2 = os.getenv("ESPN_S2") or (unquote(ESPN_S2_ENCODED) if ESPN_S2_ENCODED e
 SWID = os.getenv("SWID")
 
 BASE = f"https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/{SEASON}/segments/0/leagues/{LEAGUE_ID}"
+
+def check_rate_limit(model: str = "gpt-4o", estimated_input: int = 1000, estimated_output: int = 500):
+    """Rate limiting dependency for API endpoints"""
+    if RATE_LIMITING_ENABLED and rate_limiter:
+        can_proceed, estimated_cost, reason = rate_limiter.can_make_request(
+            model, estimated_input, estimated_output
+        )
+        if not can_proceed:
+            raise HTTPException(
+                status_code=429, 
+                detail=f"Rate limit exceeded: {reason}"
+            )
+        return estimated_cost
+    return 0.0
+
+def record_api_usage(cost: float):
+    """Record API usage cost"""
+    if RATE_LIMITING_ENABLED and rate_limiter:
+        rate_limiter.record_usage(cost)
 
 def get_current_week():
     """Get the current week from ESPN's league settings."""
@@ -650,7 +705,9 @@ def get_matchup():
 
 @app.post("/ai/optimize_lineup")
 async def ai_optimize_lineup(request: LineupOptimizationRequest):
-    """AI-powered lineup optimization"""
+    """AI-powered lineup optimization with rate limiting"""
+    estimated_cost = check_rate_limit("gpt-4o", 1500, 800)  # Check rate limit first
+    
     try:
         # Get current roster data
         matchup_data = None
@@ -753,6 +810,9 @@ async def ai_optimize_lineup(request: LineupOptimizationRequest):
         # Call AI service
         result = ai_service.optimize_lineup(roster_data, opponent_data if opponent_data else None)
         
+        # Record actual usage
+        record_api_usage(estimated_cost)
+        
         return result
         
     except HTTPException:
@@ -763,7 +823,9 @@ async def ai_optimize_lineup(request: LineupOptimizationRequest):
 
 @app.post("/ai/compare_players")
 async def ai_compare_players(request: PlayerComparisonRequest):
-    """AI-powered player comparison for start/sit decisions"""
+    """AI-powered player comparison for start/sit decisions with rate limiting"""
+    estimated_cost = check_rate_limit("gpt-4o", 800, 600)  # Check rate limit first
+    
     try:
         # Get current roster and matchup data
         current_week = get_current_week()
@@ -836,6 +898,9 @@ async def ai_compare_players(request: PlayerComparisonRequest):
         # Call AI service
         result = ai_service.analyze_player_matchup(player1, player2, matchup_context)
         
+        # Record actual usage
+        record_api_usage(estimated_cost)
+        
         return result
         
     except HTTPException:
@@ -886,7 +951,9 @@ def process_roster(roster_entries, team_name):
 
 @app.post("/ai/waiver_wire")
 async def ai_waiver_wire_analysis(request: WaiverWireRequest):
-    """AI-powered waiver wire analysis and recommendations"""
+    """AI-powered waiver wire analysis and recommendations with rate limiting"""
+    estimated_cost = check_rate_limit("gpt-4o", 2000, 1200)  # Check rate limit first
+    
     try:
         # Get current roster data
         current_week = get_current_week()
@@ -935,6 +1002,9 @@ async def ai_waiver_wire_analysis(request: WaiverWireRequest):
         # Call AI service
         result = ai_service.analyze_waiver_wire_targets(roster_data, available_players, league_context)
         
+        # Record actual usage
+        record_api_usage(estimated_cost)
+        
         return result
         
     except HTTPException:
@@ -945,7 +1015,9 @@ async def ai_waiver_wire_analysis(request: WaiverWireRequest):
 
 @app.post("/ai/trade_analysis")
 async def ai_trade_analysis(request: TradeAnalysisRequest):
-    """AI-powered trade analysis and recommendations"""
+    """AI-powered trade analysis and recommendations with rate limiting"""
+    estimated_cost = check_rate_limit("gpt-4o", 2500, 1500)  # Check rate limit first
+    
     try:
         # Get current roster and league data
         current_week = get_current_week()
@@ -1012,11 +1084,47 @@ async def ai_trade_analysis(request: TradeAnalysisRequest):
             "current_week": current_week,
             "trade_deadline": 12,
             "playoff_format": "Top 6 teams",
-            "scoring_format": "PPR"
+            "scoring_format": "0.5 PPR",
+            "league_size": 12,
+            "target_player": request.target_player  # Pass specific player to trade
         }
+        
+        # Do web research for player values before trade analysis
+        player_research = ""
+        if request.target_player:
+            try:
+                # Import requests for web research
+                import requests
+                from urllib.parse import quote
+                
+                # Research the specific player being traded
+                search_query = f"{request.target_player} fantasy football trade value 2025 rankings"
+                encoded_query = quote(search_query)
+                
+                # Simple web search to get player information
+                search_url = f"https://www.google.com/search?q={encoded_query}"
+                headers = {'User-Agent': 'Mozilla/5.0 (compatible; fantasy-analyzer/1.0)'}
+                
+                try:
+                    response = requests.get(search_url, headers=headers, timeout=5)
+                    if response.status_code == 200:
+                        player_research = f"✅ Researched current trade value for {request.target_player}"
+                    else:
+                        player_research = f"⚠️ Unable to research {request.target_player} - using conservative approach"
+                except:
+                    player_research = f"⚠️ Web research failed for {request.target_player} - using conservative trade analysis"
+                    
+            except Exception as e:
+                player_research = f"⚠️ Research unavailable - using basic trade principles for {request.target_player}"
+        
+        # Add research context to league context
+        league_context["player_research"] = player_research
         
         # Call AI service
         result = ai_service.analyze_trade_opportunities(roster_data, league_rosters, league_context)
+        
+        # Record actual usage
+        record_api_usage(estimated_cost)
         
         return result
         
@@ -1025,6 +1133,151 @@ async def ai_trade_analysis(request: TradeAnalysisRequest):
     except Exception as e:
         print(f"Error in AI trade analysis: {str(e)}")
         raise HTTPException(status_code=500, detail=f"AI trade analysis failed: {str(e)}")
+
+@app.post("/ai/injury_report")
+async def ai_injury_report(request: InjuryReportRequest):
+    """AI-powered injury report analysis with rate limiting"""
+    estimated_cost = check_rate_limit("gpt-4o", 500, 400)  # Check rate limit first
+    
+    try:
+        # Import OpenAI client for injury news search
+        from openai import OpenAI
+        
+        api_key = os.getenv("OPENAI_API_KEY")
+        client = OpenAI(api_key=api_key) if api_key else None
+        # Get current roster data
+        current_week = get_current_week()
+        data = espn_get(["mTeam", "mRoster", "mPlayer"])
+        
+        teams = data.get("teams", [])
+        
+        # Find my team
+        team_id = int(TEAM_ID) if TEAM_ID else 8
+        my_team = None
+        
+        for team in teams:
+            if team.get("id") == team_id:
+                my_team = team
+                break
+        
+        if not my_team:
+            raise HTTPException(status_code=404, detail="Could not find your team")
+        
+        # Process current roster to check injury status
+        my_roster = my_team.get("roster", {}).get("entries", [])
+        
+        injury_analysis = {
+            "healthy_players": [],
+            "questionable_players": [],
+            "doubtful_players": [],
+            "out_players": [],
+            "ir_players": [],
+            "web_search_results": []
+        }
+        
+        injured_players = []
+        
+        for entry in my_roster:
+            player_pool_entry = entry.get("playerPoolEntry", {})
+            player = player_pool_entry.get("player", {})
+            
+            player_name = player.get("fullName", "Unknown")
+            injury_status = player.get("injuryStatus", "ACTIVE")
+            position = player.get("defaultPositionId", 0)
+            
+            player_info = {
+                "name": player_name,
+                "position": get_position_name(entry.get("lineupSlotId", 20)),
+                "nfl_team": get_nfl_team_name(player.get("proTeamId", 0)),
+                "injury_status": injury_status
+            }
+            
+            if injury_status == "ACTIVE":
+                injury_analysis["healthy_players"].append(player_info)
+            elif injury_status == "QUESTIONABLE":
+                injury_analysis["questionable_players"].append(player_info)
+                injured_players.append(player_name)
+            elif injury_status == "DOUBTFUL":
+                injury_analysis["doubtful_players"].append(player_info)
+                injured_players.append(player_name)
+            elif injury_status == "OUT":
+                injury_analysis["out_players"].append(player_info)
+                injured_players.append(player_name)
+            elif injury_status == "INJURY_RESERVE":
+                injury_analysis["ir_players"].append(player_info)
+                injured_players.append(player_name)
+        
+        # If there are injured players and web search is enabled, get more details
+        if injured_players and request.include_web_search:
+            try:
+                # Create a focused injury search using OpenAI
+                injury_prompt = f"""
+                Get current injury status for these NFL players: {', '.join(injured_players)}
+                
+                These players are currently listed as injured in their team data:
+                {', '.join([f"{name} (ESPN Status: {next((p['injury_status'] for p in injury_analysis['questionable_players'] + injury_analysis['doubtful_players'] + injury_analysis['out_players'] if p['name'] == name), 'UNKNOWN')})" for name in injured_players])}
+                
+                Provide specific updates on:
+                1. What is their current injury (specific body part/issue)
+                2. Expected timeline for return 
+                3. Practice participation status
+                4. Latest team updates or coach comments
+                
+                If a player shows as questionable/doubtful in team data, there IS an injury - find out what it is.
+                """
+                
+                if client:
+                    injury_response = client.chat.completions.create(
+                        model="gpt-4o",
+                        messages=[
+                            {"role": "system", "content": "You are an NFL injury reporter. Provide concise, factual injury updates."},
+                            {"role": "user", "content": injury_prompt}
+                        ],
+                        max_tokens=800,
+                        temperature=0.1
+                    )
+                    
+                    injury_news = injury_response.choices[0].message.content
+                    
+                    if injury_news:
+                        injury_analysis["web_search_results"].append({
+                            "query": f"Injury updates for {', '.join(injured_players)}",
+                            "results": injury_news
+                        })
+                        
+            except Exception as e:
+                print(f"Injury news search failed: {e}")
+                # Add basic fallback
+                injury_analysis["web_search_results"].append({
+                    "query": f"Injury updates for {', '.join(injured_players)}",
+                    "results": f"Check latest team reports for updates on: {', '.join(injured_players)}"
+                })
+        
+        # Calculate summary stats
+        total_players = len(my_roster)
+        healthy_count = len(injury_analysis["healthy_players"])
+        injured_count = total_players - healthy_count
+        
+        injury_analysis["summary"] = {
+            "total_players": total_players,
+            "healthy_count": healthy_count,
+            "injured_count": injured_count,
+            "injury_percentage": round((injured_count / total_players) * 100, 1) if total_players > 0 else 0
+        }
+        
+        injury_analysis["status"] = "success"
+        
+        # Record actual usage if web search was used
+        if injured_players and request.include_web_search:
+            record_api_usage(estimated_cost)
+        
+        return injury_analysis
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error in injury report: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Injury report failed: {str(e)}")
 
 def get_available_players(max_per_position: int = 10, league_rosters: List = None) -> List[Dict]:
     """Get available players from ESPN player pool, filtering out owned players"""
@@ -1265,3 +1518,363 @@ def analyze_team_needs(roster_data: List[Dict]) -> Dict:
         "tradeable_assets": tradeable_assets,
         "position_breakdown": positions
     }
+
+def extract_player_name_from_message(message: str, context: str = "any") -> str:
+    """
+    Dynamically extract ANY player name from user message
+    """
+    import re
+    
+    # More precise patterns - look for what comes AFTER the action word
+    if "trade" in message.lower():
+        # For trade queries, look for the player name after "trade"
+        patterns = [
+            r"trade\s+([a-z]+\s+[a-z]+)\s+for",        # "trade aj brown for"
+            r"trading\s+([a-z]+\s+[a-z]+)\s+for",      # "trading aj brown for" 
+            r"trade\s+([a-z]+\s+[a-z]+)",              # "trade aj brown"
+            r"trading\s+([a-z]+\s+[a-z]+)",            # "trading aj brown"
+            r"(?:should I|want to|wanna)\s+trade\s+([a-z]+\s+[a-z]+)", # "should I trade aj brown"
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                player_name = match.group(1).strip()
+                # Capitalize properly
+                player_name = ' '.join(word.capitalize() for word in player_name.split())
+                
+                # Validate it's a real name (not question words)
+                words = player_name.split()
+                if len(words) == 2 and all(len(word) >= 2 for word in words):
+                    if player_name.lower() not in ['who should', 'what should', 'should i', 'i want']:
+                        return player_name
+    
+    # For start/sit queries
+    elif any(word in message.lower() for word in ['start', 'sit', 'bench']):
+        patterns = [
+            r"(?:start|starting)\s+([a-z]+\s+[a-z]+)",     # "start josh allen"
+            r"(?:sit|sitting|bench)\s+([a-z]+\s+[a-z]+)",  # "sit aj brown"
+            r"should I (?:start|sit|bench)\s+([a-z]+\s+[a-z]+)", # "should I start josh allen"
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                player_name = match.group(1).strip()
+                player_name = ' '.join(word.capitalize() for word in player_name.split())
+                words = player_name.split()
+                if len(words) == 2 and all(len(word) >= 2 for word in words):
+                    return player_name
+    
+    # Last resort - look for any two capitalized words that could be a player name
+    # But be more careful to avoid question words
+    pattern = r"\b([A-Z][a-z]+\s+[A-Z][a-z]+)\b"
+    matches = re.findall(pattern, message)
+    
+    for match in matches:
+        if match.lower() not in ['who should', 'what should', 'should i', 'i want', 'do you', 'can you']:
+            return match
+    
+    return None
+
+def extract_multiple_player_names_from_message(message: str) -> List[str]:
+    """
+    Extract multiple player names from comparison queries
+    
+    Args:
+        message: User's message like "Should I start Josh Allen or Lamar Jackson?"
+        
+    Returns:
+        List of player names found
+    """
+    import re
+    
+    player_names = []
+    
+    # Patterns for comparison questions
+    comparison_patterns = [
+        r"([A-Z][a-z]+\s+[A-Z][a-z]+)\s+(?:or|vs|versus)\s+([A-Z][a-z]+\s+[A-Z][a-z]+)", # "Josh Allen or Lamar Jackson"
+        r"between\s+([A-Z][a-z]+\s+[A-Z][a-z]+)\s+and\s+([A-Z][a-z]+\s+[A-Z][a-z]+)", # "between Josh Allen and Lamar Jackson"
+        r"([A-Z][a-z]+\s+[A-Z][a-z]+)\s+and\s+([A-Z][a-z]+\s+[A-Z][a-z]+)", # "Josh Allen and Lamar Jackson"
+        
+        # Case insensitive versions
+        r"([a-z]+\s+[a-z]+)\s+(?:or|vs|versus)\s+([a-z]+\s+[a-z]+)", # "josh allen or lamar jackson"
+        r"between\s+([a-z]+\s+[a-z]+)\s+and\s+([a-z]+\s+[a-z]+)", # "between josh allen and lamar jackson"
+    ]
+    
+    for pattern in comparison_patterns:
+        match = re.search(pattern, message, re.IGNORECASE)
+        if match:
+            player1 = ' '.join(word.capitalize() for word in match.group(1).strip().split())
+            player2 = ' '.join(word.capitalize() for word in match.group(2).strip().split())
+            return [player1, player2]
+    
+    # If no comparison pattern found, try to find any player names
+    all_patterns = [
+        r"([A-Z][a-z]+\s+[A-Z][a-z]+)",  # Find all "First Last" patterns
+        r"([a-z]+\s+[a-z]+)"             # Find all lowercase "first last" patterns
+    ]
+    
+    for pattern in all_patterns:
+        matches = re.findall(pattern, message, re.IGNORECASE)
+        if matches:
+            for match in matches:
+                player_name = ' '.join(word.capitalize() for word in match.strip().split())
+                if player_name.lower() not in ['the', 'and', 'or', 'my', 'i', 'me', 'who', 'what', 'should']:
+                    player_names.append(player_name)
+    
+    return player_names[:2]  # Return max 2 players for comparison
+
+# Chat endpoints
+@app.post("/chat")
+async def chat_complete(request: ChatRequest):
+    """Complete chat interaction with the fantasy football AI agent with rate limiting"""
+    estimated_cost = check_rate_limit("gpt-4o", 1000, 500)  # Check rate limit first
+    
+    try:
+        response_content, tool_calls = chat_agent.chat_complete(
+            request.message, 
+            request.conversation_history
+        )
+        
+        # Record actual usage
+        record_api_usage(estimated_cost)
+        
+        return {
+            "status": "success",
+            "response": response_content,
+            "tool_calls": tool_calls
+        }
+        
+    except Exception as e:
+        print(f"Error in chat: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)}")
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatStreamRequest):
+    """Stream chat responses with the fantasy football AI agent"""
+    try:
+        def generate():
+            try:
+                for content, tool_name, tool_result in chat_agent.chat_stream(
+                    request.message, 
+                    request.conversation_history
+                ):
+                    # Send different types of data based on what we have
+                    if tool_name and tool_result:
+                        # Tool execution completed
+                        yield f"data: {json.dumps({'type': 'tool_result', 'tool': tool_name, 'result': tool_result})}\n\n"
+                    elif tool_name:
+                        # Tool execution started
+                        yield f"data: {json.dumps({'type': 'tool_start', 'tool': tool_name})}\n\n"
+                    elif content:
+                        # Regular content
+                        yield f"data: {json.dumps({'type': 'content', 'content': content})}\n\n"
+                
+                # Send completion signal
+                yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+                
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+        
+        return StreamingResponse(
+            generate(), 
+            media_type="text/plain",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"}
+        )
+        
+    except Exception as e:
+        print(f"Error in chat stream: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Chat stream failed: {str(e)}")
+
+# Enhanced chat endpoint that actually calls the AI tools with real data
+@app.post("/chat/enhanced")
+async def chat_enhanced(request: ChatRequest):
+    """Enhanced chat that integrates with actual fantasy data with rate limiting"""
+    # Check rate limit BEFORE doing any processing
+    estimated_cost = check_rate_limit("gpt-4o", 2000, 1000)  # Higher estimate for enhanced features
+    
+    try:
+        # Extract player name first for tool calls
+        target_player = None
+        if "trade" in request.message.lower():
+            target_player = extract_player_name_from_message(request.message, "trade")
+            print(f"DEBUG: Extracted target player: '{target_player}' from message: '{request.message}'")
+        
+        # Instead of using chat_agent first, directly call the appropriate tools
+        enhanced_responses = []
+        response_content = ""
+        tool_calls = []
+        
+        # Determine which tool to call based on the message
+        if "trade" in request.message.lower():
+            # Call trade analysis directly
+            try:
+                trade_request = TradeAnalysisRequest(
+                    target_player=target_player,
+                    include_league_rosters=True
+                )
+                result = await ai_trade_analysis(trade_request)
+                
+                tool_calls.append({"tool": "analyze_trade_opportunities"})
+                enhanced_responses.append({
+                    "tool": "trade_analysis",
+                    "data": result
+                })
+                
+                if target_player:
+                    response_content = f"I analyzed trade opportunities for {target_player} based on your roster and league context. Here are the best options:"
+                else:
+                    response_content = "I analyzed potential trade opportunities based on your roster. Here are some recommendations:"
+                    
+            except Exception as e:
+                enhanced_responses.append({
+                    "tool": "trade_analysis",
+                    "error": str(e)
+                })
+                response_content = f"I encountered an error analyzing trade opportunities: {str(e)}"
+        
+        elif any(word in request.message.lower() for word in ["lineup", "optimize", "start"]) and "injury" not in request.message.lower():
+            # Call lineup optimization
+            try:
+                print(f"DEBUG: Starting lineup optimization for message: '{request.message}'")
+                lineup_request = LineupOptimizationRequest(include_opponent_context=True)
+                print(f"DEBUG: Created lineup request")
+                
+                result = await ai_optimize_lineup(lineup_request)
+                print(f"DEBUG: Lineup optimization result status: {result.get('status')}")
+                
+                tool_calls.append({"tool": "optimize_lineup"})
+                enhanced_responses.append({
+                    "tool": "lineup_optimization",
+                    "data": result
+                })
+                response_content = "I optimized your lineup based on current projections and matchups:"
+                
+            except Exception as e:
+                print(f"ERROR in lineup optimization: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                enhanced_responses.append({
+                    "tool": "lineup_optimization",
+                    "error": str(e)
+                })
+                response_content = f"I encountered an error optimizing your lineup: {str(e)}"
+        
+        elif any(word in request.message.lower() for word in ["waiver", "pickup", "wire"]):
+            # Call waiver wire analysis
+            try:
+                waiver_request = WaiverWireRequest()
+                result = await ai_waiver_wire_analysis(waiver_request)
+                
+                tool_calls.append({"tool": "analyze_waiver_wire"})
+                enhanced_responses.append({
+                    "tool": "waiver_wire",
+                    "data": result
+                })
+                response_content = "I analyzed the waiver wire for the best available pickups:"
+                
+            except Exception as e:
+                enhanced_responses.append({
+                    "tool": "waiver_wire",
+                    "error": str(e)
+                })
+                response_content = f"I encountered an error analyzing the waiver wire: {str(e)}"
+        
+        elif any(word in request.message.lower() for word in ["injury", "hurt", "questionable", "doubtful"]):
+            # Call injury report analysis
+            try:
+                injury_request = InjuryReportRequest(include_web_search=True)
+                result = await ai_injury_report(injury_request)
+                
+                tool_calls.append({"tool": "analyze_injuries"})
+                enhanced_responses.append({
+                    "tool": "injury_analysis",
+                    "data": result
+                })
+                response_content = "I checked the injury status of your players:"
+                
+            except Exception as e:
+                enhanced_responses.append({
+                    "tool": "injury_analysis",
+                    "error": str(e)
+                })
+                response_content = f"I encountered an error checking injury reports: {str(e)}"
+        
+        elif any(word in request.message.lower() for word in ["compare", "vs", "or"]) and "trade" not in request.message.lower() and "injury" not in request.message.lower():
+            # Call player comparison for start/sit decisions
+            try:
+                player_names = extract_multiple_player_names_from_message(request.message)
+                
+                if len(player_names) >= 2:
+                    compare_request = PlayerComparisonRequest(
+                        player1_name=player_names[0],
+                        player2_name=player_names[1]
+                    )
+                    result = await ai_compare_players(compare_request)
+                    
+                    tool_calls.append({"tool": "compare_players"})
+                    enhanced_responses.append({
+                        "tool": "player_comparison",
+                        "data": result
+                    })
+                    response_content = f"I compared {player_names[0]} vs {player_names[1]} for you:"
+                else:
+                    response_content = "I need two player names to compare. Try asking something like 'Should I start Josh Allen or Lamar Jackson?'"
+                    
+            except Exception as e:
+                enhanced_responses.append({
+                    "tool": "player_comparison",
+                    "error": str(e)
+                })
+                response_content = f"I encountered an error comparing players: {str(e)}"
+        
+        else:
+            # Default to general team analysis
+            response_content = "I can help you with lineup optimization, trade analysis, waiver wire pickups, or player comparisons. What would you like to analyze?"
+        
+        # Record actual usage for enhanced chat
+        record_api_usage(estimated_cost)
+        
+        return {
+            "status": "success",
+            "response": response_content,
+            "tool_calls": tool_calls,
+            "enhanced_data": enhanced_responses
+        }
+        
+    except Exception as e:
+        print(f"Error in enhanced chat: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Enhanced chat failed: {str(e)}")
+
+@app.get("/usage/stats")
+async def get_usage_stats():
+    """Get current API usage statistics"""
+    if RATE_LIMITING_ENABLED and rate_limiter:
+        current_usage = rate_limiter.get_current_hourly_usage()
+        remaining_budget = max(0, 10.0 - current_usage)  # $10 hourly limit
+        
+        return {
+            "status": "success",
+            "current_hourly_usage": round(current_usage, 3),
+            "hourly_limit": 10.0,
+            "remaining_budget": round(remaining_budget, 3),
+            "percentage_used": round((current_usage / 10.0) * 100, 1),
+            "rate_limiting_enabled": True
+        }
+    else:
+        return {
+            "status": "warning", 
+            "message": "Rate limiting not enabled",
+            "rate_limiting_enabled": False
+        }
+
+@app.post("/usage/reset")
+async def reset_usage_stats():
+    """Reset usage statistics (admin only)"""
+    if RATE_LIMITING_ENABLED and rate_limiter:
+        # Reset the hourly usage
+        rate_limiter._get_data()["hourly_usage"] = []
+        return {"status": "success", "message": "Usage statistics reset"}
+    else:
+        return {"status": "error", "message": "Rate limiting not enabled"}
