@@ -9,8 +9,8 @@ import string
 from urllib.parse import unquote
 import dotenv
 from typing import List, Optional, Dict
-from .ai_services import FantasyAIService
-from .chat_agent import FantasyChatAgent
+from api.ai_services import FantasyAIService
+from api.chat_agent import FantasyChatAgent
 
 # Import rate limiter
 try:

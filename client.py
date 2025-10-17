@@ -55,8 +55,13 @@ except Exception as e:
     client = None
     print(f"Error initializing OpenAI client: {e}")
 
-# API Configuration
-API_BASE_URL = "https://ai-fantasy-football.onrender.com"
+# API Configuration - auto-detect environment
+if os.getenv("STREAMLIT_CLOUD") or os.getenv("RENDER"):
+    # Production environment
+    API_BASE_URL = "https://ai-fantasy-football.onrender.com"
+else:
+    # Local development environment
+    API_BASE_URL = "http://localhost:8000"
 
 @st.cache_data(ttl=30)  # Cache for 30 seconds only
 def get_roster():
