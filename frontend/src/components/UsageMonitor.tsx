@@ -33,11 +33,7 @@ export default function UsageMonitor() {
     return 'bg-red-500';
   };
 
-  const getStatusEmoji = (percentage: number): string => {
-    if (percentage < 50) return '🟢';
-    if (percentage < 80) return '🟡';
-    return '🔴';
-  };
+
 
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
