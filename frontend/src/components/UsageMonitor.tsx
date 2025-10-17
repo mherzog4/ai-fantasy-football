@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { RefreshCw } from 'lucide-react';
-import { apiClient, handleApiError } from '@/lib/api';
-import { UsageStats } from '@/lib/types';
+import { apiClient, handleApiError } from '../lib/api';
+import { UsageStats } from '../lib/types';
 
 export default function UsageMonitor() {
   const [usageData, setUsageData] = useState<UsageStats | null>(null);

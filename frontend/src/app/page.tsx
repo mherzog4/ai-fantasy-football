@@ -1,13 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { MatchupData, Player } from '@/lib/types';
-import { apiClient, handleApiError } from '@/lib/api';
-import { formatPosition } from '@/lib/utils';
-import MatchupHeader from '@/components/MatchupHeader';
-import RosterTable from '@/components/RosterTable';
-import UsageMonitor from '@/components/UsageMonitor';
-import ChatInterface from '@/components/ChatInterface';
+import { MatchupData, Player } from '../lib/types';
+import { apiClient, handleApiError } from '../lib/api';
+import { formatPosition } from '../lib/utils';
+import MatchupHeader from '../components/MatchupHeader';
+import RosterTable from '../components/RosterTable';
+import UsageMonitor from '../components/UsageMonitor';
+import ChatInterface from '../components/ChatInterface';
 import { Loader2, AlertCircle } from 'lucide-react';
 
 export default function Dashboard() {

@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { Send, Trash2, Loader2 } from 'lucide-react';
-import { apiClient, handleApiError } from '@/lib/api';
-import { ChatMessage, ChatResponse } from '@/lib/types';
-import { getPriorityText, getConfidenceText } from '@/lib/utils';
+import { apiClient, handleApiError } from '../lib/api';
+import { ChatMessage, ChatResponse } from '../lib/types';
+import { getPriorityText, getConfidenceText } from '../lib/utils';
 
 export default function ChatInterface() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);

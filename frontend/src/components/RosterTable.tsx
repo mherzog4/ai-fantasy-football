@@ -1,7 +1,7 @@
 'use client';
 
-import { Player } from '@/lib/types';
-import { formatPosition, formatTeam, formatProjection } from '@/lib/utils';
+import { Player } from '../lib/types';
+import { formatPosition, formatTeam, formatProjection } from '../lib/utils';
 
 interface RosterTableProps {
   teamName: string;

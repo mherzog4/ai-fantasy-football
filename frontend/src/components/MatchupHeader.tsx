@@ -1,6 +1,6 @@
 'use client';
 
-import { Team } from '@/lib/types';
+import { Team } from '../lib/types';
 
 interface MatchupHeaderProps {
   myTeam: Team;
