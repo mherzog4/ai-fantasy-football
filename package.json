@@ -1,0 +1,14 @@
+{
+  "name": "ai-fantasy-football",
+  "version": "1.0.0",
+  "description": "AI-powered Fantasy Football Dashboard",
+  "scripts": {
+    "build": "cd frontend && npm run build",
+    "start": "cd frontend && npm start",
+    "dev": "cd frontend && npm run dev",
+    "install-frontend": "cd frontend && npm install"
+  },
+  "keywords": ["fantasy-football", "ai", "nextjs", "typescript"],
+  "author": "Your Name",
+  "license": "MIT"
+}
